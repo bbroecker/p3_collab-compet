@@ -83,6 +83,9 @@ class EnvironmentWrapper:
 
         return env_info
 
+    def close(self):
+        self.unity_env.close()
+
 
     @staticmethod
     def _continues_to_discrete(value, min_value, max_value, discrete_actions, brain_name):

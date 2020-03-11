@@ -21,17 +21,19 @@ def default_cfg():
     config.batch_size = 128
     config.gamma = 0.95
     config.tau = 8e-3
-    config.repeat_learn = 4
-    config.update_every = 2
+    config.repeat_learn = 5
+    config.update_every = 1
     config.ou_eps_decay_episodes = 1200
     config.ou_eps_start = 5.0
     config.ou_eps_final = .0
     config.ou_mu = 0
     config.ou_theta = 0.15
     config.ou_sigma = 0.2
+    config.noise_start = 0.30
     config.ou_steps_per_episode_estimate = 15
     config.continues_actions = True
     config.explore_strategy = ExploreStrategy.NOU_NOISE
+    config.central_critic = True
     return config
 
 
