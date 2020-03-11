@@ -80,8 +80,9 @@ class DDPGActorModel(nn.Module):
             x = self.output_activation(self.actor_output(x))
         else:
             x = self.actor_output(x)
-
-        return torch.clamp(x, self.min_action, self.max_action)
+        if self.min_action is not None and self.max_action is not None:
+            x = torch.clamp(x, self.min_action, self.max_action)
+        return x
 
     def reset_parameters(self):
 

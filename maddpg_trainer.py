@@ -79,10 +79,14 @@ class MADDPGManager:
                                                i_episode)
                 self.summary_writer.add_scalar('Agent_{}_epsilion'.format(idx), agent.current_policy.eps,
                                                i_episode)
+
                 if self.maddpg_agents[idx].current_policy.noise_summery:
                     self.summary_writer.add_histogram('Agent_{}_Noise_Histogram'.format(idx),
                                                       np.array(self.maddpg_agents[idx].current_policy.noise_summery),
                                                       i_episode)
+                if self.maddpg_agents[idx].current_policy.action_history:
+                    self.summary_writer.add_histogram('Agent_{}_action_history'.format(idx), np.array(self.maddpg_agents[idx].current_policy.action_history),
+                                                   i_episode)
             self.summary_writer.add_scalar('Avg_window_Reward', np.mean(self.episode_reward_window), i_episode)
         self.clear_episode_buffer()
         return np.mean(self.episode_reward_window)
@@ -122,19 +126,17 @@ class MADDPGManager:
                 agent.current_policy.buffer.add((states, actions, rewards, next_states, dones), 1)
 
         self.total_steps += 1
-
-        if self.total_steps % self.update_every == 0:
-            # If enough samples are available in memory, get random subset and learn
-            all_buff_size = [len(policy.buffer) for agent in self.maddpg_agents for policy in agent.subpolicies]
-            if min(all_buff_size) > self.max_batch_size and self.current_episode > self.warm_up_episodes:
-                self.train_all()
+        if self.current_episode > self.warm_up_episodes:
+            self.train_all()
 
     def train_all(self):
         for idx, agent in enumerate(self.maddpg_agents):
-            for _ in range(agent.current_policy.ddpg_config.repeat_learn):
-                critic_loss_output, actor_loss_output = self.train(idx)
-                self.critic_lost[idx].append(critic_loss_output)
-                self.actor_lost[idx].append(actor_loss_output)
+            current_policy = agent.current_policy
+            if self.total_steps % current_policy.ddpg_config.update_every == 0 and len(current_policy.buffer) > current_policy.batch_size:
+                for _ in range(agent.current_policy.ddpg_config.repeat_learn):
+                    critic_loss_output, actor_loss_output = self.train(idx)
+                    self.critic_lost[idx].append(critic_loss_output)
+                    self.actor_lost[idx].append(actor_loss_output)
 
     def prepare_data(self, agent_idx, current_policy, states, actions, rewards, next_states, dones):
         my_dones = dones[:, agent_idx].unsqueeze(1).clone()
@@ -156,11 +158,16 @@ class MADDPGManager:
                 current_action = agent.current_policy.ddpg_actor_local.forward(states[:, agent.agent_idx])
                 current_actions = torch.cat((current_actions, current_action), dim=1)
         else:
+            critic_state_size = current_policy.critic_state_size
+            critic_action_size = current_policy.critic_action_size
+            start_action = agent_idx * critic_action_size
+            end_action = start_action + critic_action_size
+            batch_size = current_policy.batch_size
             next_states_all = next_states[:, agent_idx].clone().detach()
             next_actions = current_policy.sample_action(next_states_all).clone().detach()
             states = states[:, agent_idx].clone()
             states_all = states
-            actions_all = actions[:, agent_idx].clone()
+            actions_all = actions[:, start_action:end_action].reshape(batch_size, critic_action_size).clone()
             current_actions = current_policy.sample_action(states)
 
         return next_actions, current_actions, states_all, next_states_all, actions_all, my_dones, my_rewards

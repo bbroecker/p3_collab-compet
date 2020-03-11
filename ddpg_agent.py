@@ -5,6 +5,7 @@ from enum import Enum
 import numpy as np
 import random
 
+from madddpg_utils import ExploreStrategy
 from models import DDPGActorModel, DDPGCriticModel
 
 import torch
@@ -78,16 +79,23 @@ class DDPGAgent():
         fc_1_hidden_critic = ddpg_config.fc_1_hidden_critic
         fc_2_hidden_critic = ddpg_config.fc_2_hidden_critic
 
-        output_activation = F.tanh if self.ddpg_config.continues_actions else F.softmax
+        if self.ddpg_config.continues_actions:
+            output_activation = F.tanh
+            min_action = ddpg_config.low_action
+            max_action = ddpg_config.high_action
+        else:
+            output_activation = F.tanh
+            min_action = ddpg_config.low_action
+            max_action = ddpg_config.high_action
 
         self.ddpg_actor_local = DDPGActorModel(state_dim=self.state_size, action_dim=self.action_size, seed=seed,
                                                hidden_actor_fc_1=fc_1_hidden_actor,
                                                hidden_actor_fc_2=fc_2_hidden_actor,
-                                               output_activation=output_activation).to(device)
+                                               output_activation=output_activation, min_action=min_action, max_action=max_action).to(device)
         self.ddpg_actor_target = DDPGActorModel(state_dim=self.state_size, action_dim=self.action_size, seed=seed,
                                                 hidden_actor_fc_1=fc_1_hidden_actor,
                                                 hidden_actor_fc_2=fc_2_hidden_actor,
-                                                output_activation=output_activation).to(device)
+                                                output_activation=output_activation, min_action=min_action, max_action=max_action).to(device)
 
         self.ddpg_critic_local = DDPGCriticModel(state_dim=self.critic_state_size, action_dim=self.critic_action_size,
                                                  seed=seed, hidden_critic_fc_1=fc_1_hidden_critic,
@@ -125,6 +133,7 @@ class DDPGAgent():
         self.update_every = ddpg_config.update_every
         self.batch_size = ddpg_config.batch_size
         self.noise_summery = deque(maxlen=500)
+        self.action_history = deque(maxlen=500)
 
     def step(self, states, actions, rewards, next_states, dones):
         # Save experience per agent in the replay buffer
@@ -169,17 +178,27 @@ class DDPGAgent():
 
     def sample_action(self, state):
         actions = self.ddpg_actor_local.forward(state)
-        if self.ddpg_config.continues_actions:
-            return actions
-        else:
+        return actions
+        # if not self.ddpg_config.continues_actions:
+        #     logits = actions
+        #     u = torch.rand(logits.shape).to(device)
+        #     return actions, torch.softmax(logits - torch.log(-torch.log(u)), dim=-1)
+        # return actions, None
+        # if self.ddpg_config.continues_actions:
+        #     return actions
+        # else:
+        #     if noise is None:
+        #         return actions, F.softmax(actions)
+        #     else:
+        #         return actions, F.softmax(actions + noise)
             # logits = actions
             # u = torch.rand(logits.shape).to(device)
             # return torch.softmax(logits - torch.log(-torch.log(u)), dim=-1)
-            return actions
 
-    def _continues_action(self, state, noise):
+    def _nou_noise(self, state, noise):
         state = torch.from_numpy(state).float().to(device)
         action = self.sample_action(state).detach().cpu().detach().numpy()
+        self.action_history.append(action)
 
         if not noise:
             return action
@@ -195,21 +214,38 @@ class DDPGAgent():
         self.learning_steps += 1
         return np.clip(action, self.ddpg_config.low_action, self.ddpg_config.high_action)
 
-    def _discrete_actions(self, state, noise):
-        state = torch.from_numpy(state).float().to(device)
-        # return self.sample_action(state).cpu().detach().numpy()
+    def _epsilon_greedy(self, state, noise):
         if noise and np.random.rand() < self.eps:
-            action_idx = np.random.randint(0, self.action_size)
-            actions = np.zeros((1, self.action_size))
-            actions[0][action_idx] = 1.
-            return actions
+            random_action = np.random.uniform(self.ddpg_config.low_action, self.ddpg_config.high_action, self.action_size)
+            return random_action
 
-        return self.sample_action(state).cpu().detach().numpy()
+        state = torch.from_numpy(state).float().to(device)
+        action = self.sample_action(state).cpu().detach().numpy()
+        self.action_history.append(action)
+        return action
+        # if noise and np.random.rand() < self.eps:
+        #     random_action = np.random.randint(0, self.action_size)
+        #     self.noise_summery.append(random_action)
+        #     action = np.zeros((1, self.action_size))
+        #     action[0][random_action] = 1
+        # else:
+        #     action = self.sample_action(state).cpu().detach().numpy()
+        #     self.action_history.append(np.argmax(action))
+        #
+        # return action
 
 
     def act(self, state, noise=False):
-        return self._continues_action(state, noise) if self.ddpg_config.continues_actions else self._discrete_actions(
-            state, noise)
+
+        if self.ddpg_config.explore_strategy == ExploreStrategy.NOU_NOISE:
+            return self._nou_noise(state, noise)
+        elif self.ddpg_config.explore_strategy == ExploreStrategy.EPSILON:
+            return self._epsilon_greedy(state, noise)
+        elif self.ddpg_config.explore_strategy == ExploreStrategy.DUMP:
+            return np.ones((1, self.action_size)) * 0.5
+        else:
+            raise RuntimeError("UNKNOWN EXPLORE STRATEGY")
+        # return self._nou_noise(state, noise)
 
     def learn(self):
         """Update value parameters using given batch of experience tuples.

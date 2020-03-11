@@ -1,30 +1,35 @@
 from collections import deque, namedtuple
+from enum import Enum
 
 import torch
-from unityagents import UnityEnvironment
 import numpy as np
-
-from torch.utils.tensorboard import SummaryWriter
-
-from ddpg_agent import DDPGAgent
-from maddpg_trainer import MADDPGManager
 from xp_buffers import BufferType
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 EnvInfo = namedtuple("EnvInfo", field_names=["vector_observations", "rewards", "local_done"])
 
+class ExploreStrategy(Enum):
+    EPSILON = 0
+    NOU_NOISE = 1
+    DUMP = 2
+
 class EnvironmentWrapper:
-    def __init__(self, unity_env, continues_actions=True):
+    def __init__(self, unity_env, discrete_actions=False, action_min=-1., action_max=1.):
         self.unity_env = unity_env
-        self.continues_actions = continues_actions
+        self.discrete_actions = discrete_actions
         self.brain_names = unity_env.brain_names
         self.brains = [unity_env.brains[brain_name] for brain_name in self.brain_names]
         self.state_sizes = []
         self.action_sizes = []
+        self.discrete_action_size = []
+        self.discrete_action_size_brain_name = {}
         self.action_space_brain_name = {}
         self.brain_num_agents = {}
         self.num_agents = 0
+        self.action_min = action_min
+        self.action_max = action_max
+        self.score = [0] * 2
         self._get_state_action_space()
 
     def _get_state_action_space(self):
@@ -48,8 +53,16 @@ class EnvironmentWrapper:
             states = env_info.vector_observations
             state_size = states.shape[1]
             self.state_sizes.extend([state_size] * num_agents)
-            self.action_sizes.extend([action_size] * num_agents)
-            self.action_space_brain_name[brain_name] = action_size
+            if self.discrete_actions:
+                self.action_sizes.extend([1] * num_agents)
+                self.action_space_brain_name[brain_name] = 1
+                if brain_name == "StrikerBrain":
+                    action_size = 4
+                self.discrete_action_size.extend([action_size] * num_agents)
+                self.discrete_action_size_brain_name[brain_name] = action_size
+            else:
+                self.action_sizes.extend([action_size] * num_agents)
+                self.action_space_brain_name[brain_name] = action_size
             print('There are {} agents. Each observes a state with length: {}'.format(states.shape[0], state_size))
             print('The state for the first agent looks like:', states[0])
 
@@ -70,12 +83,28 @@ class EnvironmentWrapper:
 
         return env_info
 
-    def _discrete_actions(self, brain_name, brain_actions, action_sizes):
+
+    @staticmethod
+    def _continues_to_discrete(value, min_value, max_value, discrete_actions, brain_name):
+        value_range = max_value - min_value
+        value = np.clip(value, min_value, max_value - 0.001)
+        step = value_range / discrete_actions
+        action = int((value - min_value) / float(step))
+        if brain_name == "StrikerBrain":
+            if action > 1:
+                action += 2
+        return action
+
+    def _discrete_actions(self, brain_name, brain_actions):
         actions = []
         start_idx = 0
-        for _ in range(self.brain_num_agents[brain_name]):
+        action_sizes = self.action_space_brain_name[brain_name]
+        for idx in range(self.brain_num_agents[brain_name]):
             end_idx = start_idx+action_sizes
-            action = np.argmax(brain_actions[start_idx: end_idx])
+            # probs = brain_actions[start_idx: end_idx]
+            # a = [i for i in range(action_sizes)]
+            # action = np.random.choice(a, p=probs)
+            action = self._continues_to_discrete(brain_actions[idx], self.action_min, self.action_max, self.discrete_action_size_brain_name[brain_name], brain_name)
             actions.append(action)
             start_idx = end_idx
         return np.array(actions)
@@ -90,8 +119,10 @@ class EnvironmentWrapper:
             action_size = self.action_space_brain_name[brain_name]
             action_end = action_start + self.brain_num_agents[brain_name] * action_size
             brain_actions = actions[action_start:action_end]
-            if not self.continues_actions:
-                brain_actions = self._discrete_actions(brain_name, brain_actions, action_size)
+            if self.discrete_actions:
+                brain_actions = self._discrete_actions(brain_name, brain_actions)
+                # if brain_name == "GoalieBrain":
+                #     print(brain_actions[0])
             action_dict[brain_name] = brain_actions
             action_start = action_end
 
@@ -104,6 +135,7 @@ class EnvironmentWrapper:
             states_all.extend([state for state in states])
             rewards_all.extend([reward for reward in rewards])
             dones_all.extend([done for done in dones])
+
         env_info = EnvInfo(np.array(states_all), np.array(rewards_all), np.array(dones_all))
         return env_info
 
@@ -193,9 +225,6 @@ class DDPGConfig:
         self.warmup_steps = 200
         self.low_action = -1.
         self.high_action = 1.
-        self.noise_start = 0.2
-        self.noise_end = 0.05
-        self.noise_steps = 2000 * 10
         self.central_critic = True
         self.multi_agent_actions = None
         self.fc_1_hidden_actor = 128
@@ -215,10 +244,10 @@ class DDPGConfig:
 
     def __str__(self):
         central = "" if not self.central_critic else "_central_critic"
-        return "MADDPG_crh1_{}_crh2_{}_actor_lr_{}_critic_lr_{}_batch_size_{}_repeat_{}_noise_start_{}_noise_end _{}{}".format(
+        return "MADDPG_crh1_{}_crh2_{}_actor_lr_{}_critic_lr_{}_batch_size_{}_repeat_{}_update_every_{}_noise_start_{}_noise_end _{}{}".format(
             self.fc_1_hidden_critic,
             self.fc_2_hidden_critic,
-            self.actor_lr, self.critic_lr, self.batch_size, self.repeat_learn, self.noise_start, self.noise_end, central)
+            self.actor_lr, self.critic_lr, self.batch_size, self.repeat_learn, self.update_every, self.ou_eps_start, self.ou_eps_final, central)
 
 # def load_weights(agents, main_dir)
 #
