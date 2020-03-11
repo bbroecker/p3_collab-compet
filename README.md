@@ -33,7 +33,7 @@ This project requires **Python 3.5** and the following libaries:
 
 ### Instructions
 
-Navigate to the `p3_collab-compet/` directory and start jupyter notebook:
+Navigate to the `p3_collab-compete/` directory and start jupyter notebook:
 
 ```shell
 $ ipython3 notebook
@@ -43,4 +43,4 @@ follow the instructions in the notebook to train your own agent or test the best
 
 ### Report
 
-Read a detailed report, describing appied approaches and achieved results [here](https://github.com/bbroecker/p3_collab-compet/blob/master/Report.pdf) 
+Read a detailed report, describing appied approaches and achieved results [here](https://github.com/bbroecker/p3_collab-compete/blob/master/Report.pdf) 
